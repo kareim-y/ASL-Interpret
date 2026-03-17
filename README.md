@@ -178,4 +178,4 @@ After training, the `artifacts/` directory will contain:
 
 ## Course Context
 
-Developed as the final project for **ENSF 511 — Industrial IoT & Data Analytics**.
+Developed as the final project for **ENDG 511 — Industrial IoT & Artifical Intelligence**.
