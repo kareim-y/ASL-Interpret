@@ -1,0 +1,28 @@
+# Trained models and artifacts
+artifacts/
+artifacts_run*/
+
+# Dataset (too large for GitHub)
+Data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Virtual environments
+asl_env/
+.venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
