@@ -1,4 +1,4 @@
-# ASL Letter Recognition — ENSF 511 Final Project
+# ASL Letter Recognition
 
 Real-time American Sign Language (ASL) letter classification using transfer learning on MobileNetV2, exported to TFLite for edge deployment. The repo contains three main components: a data collection UI, a training notebook, and a live inference UI.
 
