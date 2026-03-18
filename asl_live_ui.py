@@ -111,7 +111,7 @@ def get_roi_from_hand(frame_bgr, hand_landmarks, padding=30):
     return crop, box
 
 
-def stable_letter_logic(pred_idx, pred_conf, class_names, state, stable_frames=8, conf_thresh=0.70):
+def stable_letter_logic(pred_idx, pred_conf, class_names, state, stable_frames=8, conf_thresh=0.70, repeat_cooldown=1.5):
     current_label = class_names[pred_idx]
 
     if pred_conf < conf_thresh:
@@ -125,11 +125,18 @@ def stable_letter_logic(pred_idx, pred_conf, class_names, state, stable_frames=8
         state["candidate"] = current_label
         state["count"] = 1
 
-    if state["count"] >= stable_frames and state["last_committed"] != current_label:
-        state["last_committed"] = current_label
-        state["word"] += current_label
-        state["count"] = 0
-        return current_label
+    if state["count"] >= stable_frames:
+        now = time.time()
+        # Allow the same letter again if enough time has passed since last commit
+        cooldown_expired = (now - state["last_commit_time"]) >= repeat_cooldown
+        is_different = state["last_committed"] != current_label
+
+        if is_different or cooldown_expired:
+            state["last_committed"] = current_label
+            state["last_commit_time"] = now
+            state["word"] += current_label
+            state["count"] = 0
+            return current_label
 
     return None
 
@@ -182,6 +189,7 @@ def run_live_ui(args):
         "candidate": None,
         "count": 0,
         "last_committed": None,
+        "last_commit_time": 0.0,
         "word": "",
     }
 
@@ -255,6 +263,7 @@ def run_live_ui(args):
                     state,
                     stable_frames=args.stable_frames,
                     conf_thresh=args.conf_thresh,
+                    repeat_cooldown=args.repeat_cooldown,
                 )
 
                 if box is not None:
@@ -263,7 +272,7 @@ def run_live_ui(args):
                     cv2.putText(
                         display,
                         f"{last_pred} ({last_conf:.2f})",
-                        (x1, max(20, y1 - 10)),
+                        (x1, max(20, y1 - 35)),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.7,
                         (255, 0, 0),
@@ -310,6 +319,7 @@ def parse_args():
     parser.add_argument("--padding", type=int, default=30, help="Padding around detected hand box")
     parser.add_argument("--stable-frames", type=int, default=8, help="Frames required before committing a letter")
     parser.add_argument("--conf-thresh", type=float, default=0.70, help="Minimum confidence to consider a prediction")
+    parser.add_argument("--repeat-cooldown", type=float, default=2, help="Seconds before the same letter can be committed again")
     return parser.parse_args()
 
 

@@ -1,9 +1,15 @@
 # Trained models and artifacts
 artifacts/
 artifacts_run*/
+artifacts-EfficientNet-1500/
+artifacts-MobileNet-1500/
+artifacts-MobileNet-200/
 
 # Dataset (too large for GitHub)
 Data/
+Data2/
+Data200/
+Data1500/
 
 # Python
 __pycache__/
