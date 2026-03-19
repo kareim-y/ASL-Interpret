@@ -24,7 +24,21 @@ else:
 
 DEFAULT_CLASSES = [chr(ord('A') + i) for i in range(26)]
 
+# ── Colour palette ──────────────────────────────────────────────────
+COL_GREEN   = (0, 220, 100)
+COL_YELLOW  = (0, 220, 255)
+COL_RED     = (0, 80, 255)
+COL_WHITE   = (255, 255, 255)
+COL_GREY    = (180, 180, 180)
+COL_DARK_BG = (30, 30, 30)
+COL_CYAN    = (255, 220, 0)
 
+PANEL_HEIGHT = 150
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+FONT_SM = cv2.FONT_HERSHEY_SIMPLEX
+
+
+# ── Model / inference helpers (unchanged) ───────────────────────────
 def load_metadata(model_dir: Path):
     metadata_path = model_dir / "metadata.json"
     if metadata_path.exists():
@@ -111,7 +125,9 @@ def get_roi_from_hand(frame_bgr, hand_landmarks, padding=30):
     return crop, box
 
 
-def stable_letter_logic(pred_idx, pred_conf, class_names, state, stable_frames=8, conf_thresh=0.70, repeat_cooldown=1.5):
+# ── Letter commit logic ─────────────────────────────────────────────
+def stable_letter_logic(pred_idx, pred_conf, class_names, state,
+                        stable_frames=8, conf_thresh=0.70, repeat_cooldown=1.5):
     current_label = class_names[pred_idx]
 
     if pred_conf < conf_thresh:
@@ -127,7 +143,6 @@ def stable_letter_logic(pred_idx, pred_conf, class_names, state, stable_frames=8
 
     if state["count"] >= stable_frames:
         now = time.time()
-        # Allow the same letter again if enough time has passed since last commit
         cooldown_expired = (now - state["last_commit_time"]) >= repeat_cooldown
         is_different = state["last_committed"] != current_label
 
@@ -141,21 +156,123 @@ def stable_letter_logic(pred_idx, pred_conf, class_names, state, stable_frames=8
     return None
 
 
-def draw_text_block(frame, lines, start=(10, 25), line_height=28):
-    x, y = start
-    for i, line in enumerate(lines):
-        cv2.putText(
-            frame,
-            line,
-            (x, y + i * line_height),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA,
-        )
+# ── Drawing helpers ─────────────────────────────────────────────────
+def conf_color(conf, thresh):
+    """Return BGR colour that ramps red -> yellow -> green based on confidence."""
+    if conf < thresh:
+        return COL_RED
+    ratio = min((conf - thresh) / (1.0 - thresh + 1e-9), 1.0)
+    if ratio < 0.5:
+        # red -> yellow
+        t = ratio / 0.5
+        return (0, int(80 + 140 * t), 255)
+    else:
+        # yellow -> green
+        t = (ratio - 0.5) / 0.5
+        return (0, int(220), int(255 * (1 - t)))
 
 
+def draw_corner_brackets(img, x1, y1, x2, y2, color, thickness=3, length=30):
+    """Draw L-shaped corner brackets instead of a full rectangle."""
+    ln = length
+    # Top-left
+    cv2.line(img, (x1, y1), (x1 + ln, y1), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1, y1), (x1, y1 + ln), color, thickness, cv2.LINE_AA)
+    # Top-right
+    cv2.line(img, (x2, y1), (x2 - ln, y1), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y1), (x2, y1 + ln), color, thickness, cv2.LINE_AA)
+    # Bottom-left
+    cv2.line(img, (x1, y2), (x1 + ln, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1, y2), (x1, y2 - ln), color, thickness, cv2.LINE_AA)
+    # Bottom-right
+    cv2.line(img, (x2, y2), (x2 - ln, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y2), (x2, y2 - ln), color, thickness, cv2.LINE_AA)
+
+def draw_commit_flash(img, flash_until):
+    """Draw a green border flash when a letter is committed."""
+    if time.time() < flash_until:
+        h, w = img.shape[:2]
+        cv2.rectangle(img, (0, 0), (w - 1, h - 1), COL_GREEN, 6, cv2.LINE_AA)
+
+
+def draw_cooldown_bar(img, state, box, repeat_cooldown, conf_thresh, current_conf):
+    """Draw a small progress bar below the detection box showing cooldown."""
+    if state["last_committed"] is None or current_conf < conf_thresh:
+        return
+    elapsed = time.time() - state["last_commit_time"]
+    if elapsed >= repeat_cooldown:
+        return  # cooldown already done
+
+    ratio = min(elapsed / repeat_cooldown, 1.0)
+    x1, y1, x2, y2 = box
+    bar_y = y2 + 12
+    bar_w = x2 - x1
+    bar_h = 8
+
+    # Background
+    cv2.rectangle(img, (x1, bar_y), (x2, bar_y + bar_h), (80, 80, 80), -1)
+    # Fill
+    fill_x = x1 + int(bar_w * ratio)
+    cv2.rectangle(img, (x1, bar_y), (fill_x, bar_y + bar_h), COL_CYAN, -1)
+    # Border
+    cv2.rectangle(img, (x1, bar_y), (x2, bar_y + bar_h), COL_WHITE, 1)
+
+
+def draw_info_panel(img, model_name, pred, conf, latency_ms):
+    """Draw a dark semi-transparent panel at the bottom with stats."""
+    h, w = img.shape[:2]
+    panel_top = h - PANEL_HEIGHT
+
+    # Semi-transparent dark overlay
+    overlay = img.copy()
+    cv2.rectangle(overlay, (0, panel_top), (w, h), COL_DARK_BG, -1)
+    cv2.addWeighted(overlay, 0.85, img, 0.15, 0, img)
+
+    # Thin separator line
+    cv2.line(img, (0, panel_top), (w, panel_top), (80, 80, 80), 1)
+
+    # Layout: split into columns
+    y_row1 = panel_top + 50
+    y_row2 = panel_top + 95
+    col1 = 20
+    col2 = w // 3
+    col3 = (w // 3) * 2
+
+    # Column 1: Model
+    cv2.putText(img, "MODEL", (col1, y_row1 - 12), FONT_SM, 1.2, COL_GREY, 1, cv2.LINE_AA)
+    cv2.putText(img, model_name, (col1, y_row1 + 20), FONT, 1, COL_WHITE, 1, cv2.LINE_AA)
+
+    # Column 2: Prediction + confidence
+    cv2.putText(img, "PREDICTION", (col2, y_row1 - 12), FONT_SM, 1.2, COL_GREY, 1, cv2.LINE_AA)
+    pred_color = conf_color(conf, 0.5)
+    cv2.putText(img, f"{pred}", (col2, y_row1 + 16), FONT, 1, pred_color, 2, cv2.LINE_AA)
+    cv2.putText(img, f"{conf:.0%}", (col2 + 60, y_row1 + 20), FONT, 1, COL_GREY, 1, cv2.LINE_AA)
+
+    # Column 3: Latency
+    cv2.putText(img, "LATENCY", (col3, y_row1 - 12), FONT_SM, 1.2, COL_GREY, 1, cv2.LINE_AA)
+    cv2.putText(img, f"{latency_ms:.1f} ms", (col3, y_row1 + 20), FONT, 1, COL_WHITE, 1, cv2.LINE_AA)
+
+    # Controls hint
+    cv2.putText(img, "Q quit | C clear | SPACE space | BKSP delete",
+                (col1, y_row2 + 30), FONT_SM, 0.85, (120, 120, 120), 1, cv2.LINE_AA)
+
+
+def draw_word_display(img, word):
+    """Draw the built-up word as green text in the top-right area."""
+    if not word:
+        return
+    h, w = img.shape[:2]
+    label = f"Sentence: {word}"
+    text_size = cv2.getTextSize(label, FONT, 1.2, 2)[0]
+    tx = w - text_size[0] - 15
+    ty = 35
+    # Dark background pill for readability
+    cv2.rectangle(img, (tx - 10, ty - 25), (tx + text_size[0] + 10, ty + 8),
+                  COL_DARK_BG, -1)
+    cv2.putText(img, label, (tx, ty), FONT, 1.2, COL_GREEN, 2, cv2.LINE_AA)
+
+
+# ── Main loop ───────────────────────────────────────────────────────
 def run_live_ui(args):
     model_dir = Path(args.model_dir)
     model_path = model_dir / args.model_name
@@ -196,6 +313,7 @@ def run_live_ui(args):
     last_pred = "-"
     last_conf = 0.0
     last_latency_ms = 0.0
+    flash_until = 0.0  # timestamp until which the green border flash shows
 
     print("Controls: q=quit, c=clear word, backspace/delete=remove last letter, space=add space")
 
@@ -209,16 +327,22 @@ def run_live_ui(args):
             display = frame.copy()
             roi = None
             box = None
+            hand_detected = False
 
+            # ── Hand detection ──────────────────────────────────
             if hands is not None:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 results = hands.process(frame_rgb)
                 if results.multi_hand_landmarks:
+                    hand_detected = True
                     hand_landmarks = results.multi_hand_landmarks[0]
-                    roi, box = get_roi_from_hand(frame, hand_landmarks, padding=args.padding)
+                    roi, box = get_roi_from_hand(frame, hand_landmarks,
+                                                 padding=args.padding)
                     if mp_draw is not None:
-                        mp_draw.draw_landmarks(display, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                        mp_draw.draw_landmarks(display, hand_landmarks,
+                                               mp_hands.HAND_CONNECTIONS)
 
+            # ── Fallback centre crop ────────────────────────────
             if roi is None or roi.size == 0:
                 h, w = frame.shape[:2]
                 box_size = int(min(h, w) * 0.6)
@@ -229,18 +353,11 @@ def run_live_ui(args):
                 y2 = min(cy + box_size // 2, h)
                 roi = frame[y1:y2, x1:x2]
                 box = (x1, y1, x2, y2)
-                cv2.rectangle(display, (x1, y1), (x2, y2), (255, 200, 0), 2)
-                cv2.putText(
-                    display,
-                    "Fallback crop",
-                    (x1, max(20, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 200, 0),
-                    2,
-                    cv2.LINE_AA,
-                )
+                draw_corner_brackets(display, x1, y1, x2, y2,
+                                     COL_YELLOW, thickness=2, length=35)
 
+            # ── Inference ───────────────────────────────────────
+            committed = None
             if roi is not None and roi.size > 0:
                 input_image = preprocess_for_tflite(roi, image_size)
                 input_tensor = prepare_input_tensor(input_image, input_details)
@@ -256,7 +373,7 @@ def run_live_ui(args):
                 last_conf = float(probs[pred_idx])
                 last_pred = class_names[pred_idx]
 
-                stable_letter_logic(
+                committed = stable_letter_logic(
                     pred_idx,
                     last_conf,
                     class_names,
@@ -266,29 +383,38 @@ def run_live_ui(args):
                     repeat_cooldown=args.repeat_cooldown,
                 )
 
+                # Trigger flash on commit
+                if committed is not None:
+                    flash_until = time.time() + 0.3
+
+                # ── Confidence-coloured corner brackets ─────────
                 if box is not None:
                     x1, y1, x2, y2 = box
-                    cv2.rectangle(display, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    color = conf_color(last_conf, args.conf_thresh)
+                    draw_corner_brackets(display, x1, y1, x2, y2,
+                                         color, thickness=3, length=35)
+
+                    # Prediction label above top-left bracket
                     cv2.putText(
                         display,
-                        f"{last_pred} ({last_conf:.2f})",
-                        (x1, max(20, y1 - 35)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (255, 0, 0),
-                        2,
-                        cv2.LINE_AA,
+                        f"{last_pred} ({last_conf:.0%})",
+                        (x1 + 5, max(25, y1 - 12)),
+                        FONT, 1.2, color, 2, cv2.LINE_AA,
                     )
 
-            lines = [
-                f"Model: {model_path.name}",
-                f"Prediction: {last_pred}",
-                f"Confidence: {last_conf:.2f}",
-                f"Latency: {last_latency_ms:.1f} ms",
-                f"Word: {state['word']}",
-            ]
-            draw_text_block(display, lines)
+            # ── UI overlays ─────────────────────────────────────
+            draw_commit_flash(display, flash_until)
+            draw_word_display(display, state["word"])
 
+            if box is not None:
+                draw_cooldown_bar(display, state, box,
+                                  args.repeat_cooldown, args.conf_thresh,
+                                  last_conf)
+
+            draw_info_panel(display, model_path.name,
+                            last_pred, last_conf, last_latency_ms)
+
+            # ── Show & handle keys ──────────────────────────────
             cv2.imshow("ASL Live UI (TFLite)", display)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -298,7 +424,7 @@ def run_live_ui(args):
                 state["last_committed"] = None
                 state["candidate"] = None
                 state["count"] = 0
-            elif key in (8, 127):  # backspace/delete
+            elif key in (8, 127):  # backspace / delete
                 state["word"] = state["word"][:-1]
                 state["last_committed"] = None
             elif key == ord(' '):
@@ -312,14 +438,22 @@ def run_live_ui(args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run ASL live UI with a TFLite model.")
-    parser.add_argument("--model-dir", type=str, default="artifacts", help="Directory containing metadata.json and .tflite model")
-    parser.add_argument("--model-name", type=str, default="asl_fp16.tflite", help="TFLite model file name")
-    parser.add_argument("--camera-id", type=int, default=0, help="Webcam device index")
-    parser.add_argument("--padding", type=int, default=30, help="Padding around detected hand box")
-    parser.add_argument("--stable-frames", type=int, default=8, help="Frames required before committing a letter")
-    parser.add_argument("--conf-thresh", type=float, default=0.70, help="Minimum confidence to consider a prediction")
-    parser.add_argument("--repeat-cooldown", type=float, default=2, help="Seconds before the same letter can be committed again")
+    parser = argparse.ArgumentParser(
+        description="Run ASL live UI with a TFLite model.")
+    parser.add_argument("--model-dir", type=str, default="artifacts",
+                        help="Directory containing metadata.json and .tflite model")
+    parser.add_argument("--model-name", type=str, default="asl_fp16.tflite",
+                        help="TFLite model file name")
+    parser.add_argument("--camera-id", type=int, default=0,
+                        help="Webcam device index")
+    parser.add_argument("--padding", type=int, default=30,
+                        help="Padding around detected hand box")
+    parser.add_argument("--stable-frames", type=int, default=8,
+                        help="Frames required before committing a letter")
+    parser.add_argument("--conf-thresh", type=float, default=0.70,
+                        help="Minimum confidence to consider a prediction")
+    parser.add_argument("--repeat-cooldown", type=float, default=1.5,
+                        help="Seconds before the same letter can be committed again")
     return parser.parse_args()
 
 
