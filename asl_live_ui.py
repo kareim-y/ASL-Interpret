@@ -24,7 +24,7 @@ else:
 
 DEFAULT_CLASSES = [chr(ord('A') + i) for i in range(26)]
 
-# ── Colour palette ──────────────────────────────────────────────────
+# Colour palette
 COL_GREEN   = (0, 220, 100)
 COL_YELLOW  = (0, 220, 255)
 COL_RED     = (0, 80, 255)
@@ -38,7 +38,7 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 FONT_SM = cv2.FONT_HERSHEY_SIMPLEX
 
 
-# ── Model / inference helpers (unchanged) ───────────────────────────
+# Model / inference helpers
 def load_metadata(model_dir: Path):
     metadata_path = model_dir / "metadata.json"
     if metadata_path.exists():
@@ -125,7 +125,7 @@ def get_roi_from_hand(frame_bgr, hand_landmarks, padding=30):
     return crop, box
 
 
-# ── Letter commit logic ─────────────────────────────────────────────
+# Letter commit logic
 def stable_letter_logic(pred_idx, pred_conf, class_names, state,
                         stable_frames=8, conf_thresh=0.70, repeat_cooldown=1.5):
     current_label = class_names[pred_idx]
@@ -156,7 +156,7 @@ def stable_letter_logic(pred_idx, pred_conf, class_names, state,
     return None
 
 
-# ── Drawing helpers ─────────────────────────────────────────────────
+# Drawing helpers
 def conf_color(conf, thresh):
     """Return BGR colour that ramps red -> yellow -> green based on confidence."""
     if conf < thresh:
@@ -272,7 +272,7 @@ def draw_word_display(img, word):
     cv2.putText(img, label, (tx, ty), FONT, 1.2, COL_GREEN, 2, cv2.LINE_AA)
 
 
-# ── Main loop ───────────────────────────────────────────────────────
+# Main loop 
 def run_live_ui(args):
     model_dir = Path(args.model_dir)
     model_path = model_dir / args.model_name
@@ -329,7 +329,7 @@ def run_live_ui(args):
             box = None
             hand_detected = False
 
-            # ── Hand detection ──────────────────────────────────
+            # Hand detection
             if hands is not None:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 results = hands.process(frame_rgb)
@@ -342,7 +342,7 @@ def run_live_ui(args):
                         mp_draw.draw_landmarks(display, hand_landmarks,
                                                mp_hands.HAND_CONNECTIONS)
 
-            # ── Fallback centre crop ────────────────────────────
+            # Fallback centre crop
             if roi is None or roi.size == 0:
                 h, w = frame.shape[:2]
                 box_size = int(min(h, w) * 0.6)
@@ -356,7 +356,7 @@ def run_live_ui(args):
                 draw_corner_brackets(display, x1, y1, x2, y2,
                                      COL_YELLOW, thickness=2, length=35)
 
-            # ── Inference ───────────────────────────────────────
+            # Inference
             committed = None
             if roi is not None and roi.size > 0:
                 input_image = preprocess_for_tflite(roi, image_size)
@@ -387,7 +387,7 @@ def run_live_ui(args):
                 if committed is not None:
                     flash_until = time.time() + 0.3
 
-                # ── Confidence-coloured corner brackets ─────────
+                # Confidence-coloured corner brackets
                 if box is not None:
                     x1, y1, x2, y2 = box
                     color = conf_color(last_conf, args.conf_thresh)
@@ -402,7 +402,7 @@ def run_live_ui(args):
                         FONT, 1.2, color, 2, cv2.LINE_AA,
                     )
 
-            # ── UI overlays ─────────────────────────────────────
+            # UI overlays
             draw_commit_flash(display, flash_until)
             draw_word_display(display, state["word"])
 
@@ -414,7 +414,7 @@ def run_live_ui(args):
             draw_info_panel(display, model_path.name,
                             last_pred, last_conf, last_latency_ms)
 
-            # ── Show & handle keys ──────────────────────────────
+            # Show & handle keys
             cv2.imshow("ASL Live UI (TFLite)", display)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
